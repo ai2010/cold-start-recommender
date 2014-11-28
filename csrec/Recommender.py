@@ -3,6 +3,7 @@ import pandas as pd
 import numpy as np
 from time import time
 import logging
+import math
 
 class Recommender(object):
     """
@@ -35,6 +36,7 @@ class Recommender(object):
         self.default_rating = default_rating  # Rating inserted by default
         self.max_rating = max_rating
         self._items_cooccurence = pd.DataFrame  # cooccurrence of items
+        self._items_llr = pd.DataFrame  # llr matrix
         self._categories_cooccurence = {} # cooccurrence of categories
         self.cooccurence_updated = 0.0  # Time of update
         self.item_ratings = defaultdict(dict)  # matrix of ratings for a item (inmemory testing)
@@ -267,6 +269,72 @@ class Recommender(object):
                 all_items = set([ d["_id"] for d in self.db['items'].find({}, {"_id": 1})])
             self.items_by_popularity = pop_items + list( all_items - set(pop_items) )
 
+
+    def calc_k(self,items_cooccurence,a,b):
+        """
+        Calculate the matrix k as described by Ted Dunning 
+        (http://tdunning.blogspot.it/2008/03/surprise-and-coincidence.html)
+        param a: event a (book purchase)
+        param b: event b (book purchase)
+        return k_matrix: matrix that counts the number of events A,B (k11)
+        number of events B but not A (k12), number of events A not B (k21)
+        and the number of events without A,B (k22)
+        """
+        tmpk = [[0 for j in range(2)] for i in range(2)]
+        tmpk[0][0] = items_cooccurence.iat[a,b]#a and b
+        nrows = len(items_cooccurence)
+        for i in range(0,nrows):
+            if(i!=a):
+               tmpk[0][1] += items_cooccurence.iat[b,i]#b but not a
+            if(i!=b):
+               tmpk[1][0] += items_cooccurence.iat[a,i]#a but not b
+            for j in range(0,nrows):
+                if(i!=a and i!=b and j>=i):
+                   tmpk[1][1] += items_cooccurence.iat[i,j]#not a not b
+        return tmpk
+
+    def calc_llr(self,k_matrix):
+        """
+        Calculate the loglikelihood ratio given the k matrix as described by
+        Ted Dunning 
+        (http://tdunning.blogspot.it/2008/03/surprise-and-coincidence.html)
+        param k_matrix: matrix that counts the number of events A,B (k11)
+        number of events B but not A (k12), number of events A not B (k21)
+        and the number of events without A,B (k22)
+        return : the value of the loglikelihoodratio test to determine 
+        an estimate two books are bought together based on similarity (not 
+        popularity)
+        """
+        Hcols=Hrows=Htot=0.0
+        invN = 1.0/(sum(k_matrix[0])+sum(k_matrix[1]))
+        for i in range(0,2):
+            if((k_matrix[0][i]+k_matrix[1][i])!=0.0):
+               Hcols += invN*(k_matrix[0][i]+k_matrix[1][i])*math.log((k_matrix[0][i]+k_matrix[1][i])*invN )#sum of rows
+            if((k_matrix[i][0]+k_matrix[i][1])!=0.0):
+               Hrows += invN*(k_matrix[i][0]+k_matrix[i][1])*math.log((k_matrix[i][0]+k_matrix[i][1])*invN )#sum of cols
+            for j in range(0,2):
+                if(k_matrix[i][j]!=0.0):
+                   Htot +=invN*k_matrix[i][j]*math.log(invN*k_matrix[i][j])
+
+        return 2.0*(Htot-Hcols-Hrows)/invN
+
+    def loglikelihood_ratio(self,items_cooccurence):
+        """
+        Calculate the loglikelihood ratio as described by Ted Dunning (http://
+        tdunning.blogspot.it/2008/03/surprise-and-coincidence.html)
+        param items_cooccurence: co-occurence matrix 
+        return: update the items_llr matrix
+        """
+        #assert(len(items_cooccurence)==len(items_cooccurence.columns))#verify the matrix is squared
+        self._items_llr= pd.DataFrame(items_cooccurence).fillna(0).astype(float)
+        for i in range(len(items_cooccurence)):
+            for j in range(len(items_cooccurence)):
+                if(j>=i):
+                   tmpk=self.calc_k(items_cooccurence,i,j)
+                   self._items_llr.ix[i,j] = self.calc_llr(tmpk)
+                else:
+                   self._items_llr.ix[i,j] = self._items_llr.iat[j,i]#symm
+        print self._items_llr
     def get_similar_item(self, item_id, user_id=None, algorithm='simple'):
         """
         Simple: return the row of the co-occurence matrix ordered by score or,

@@ -282,15 +282,10 @@ class Recommender(object):
         """
         tmpk = [[0 for j in range(2)] for i in range(2)]
         tmpk[0][0] = items_cooccurence.iat[a,b]#a and b
-        nrows = len(items_cooccurence)
-        for i in range(0,nrows):
-            if(i!=a):
-               tmpk[0][1] += items_cooccurence.iat[b,i]#b but not a
-            if(i!=b):
-               tmpk[1][0] += items_cooccurence.iat[a,i]#a but not b
-            for j in range(0,nrows):
-                if(i!=a and i!=b and j>=i):
-                   tmpk[1][1] += items_cooccurence.iat[i,j]#not a not b
+        tmpk[0][1] = items_cooccurence.iat[a,a]-items_cooccurence.iat[b,a]
+        tmpk[1][0] = items_cooccurence.iat[b,b]-items_cooccurence.iat[b,a]
+        tmpk[1][1] = len(user_ratings)-(items_cooccurence.iat[a,a]+items_cooccurence.iat[b,b]-items_cooccurence.iat[a,b])
+        assert(tmpk[0][0]>=0.0 or tmpk[0][1]>=0.0 or tmpk[1][0]>=0.0 or tmpk[1][1]>=0.0)
         return tmpk
 
     def calc_llr(self,k_matrix):
@@ -304,6 +299,8 @@ class Recommender(object):
         return : the value of the loglikelihoodratio test to determine 
         an estimate two books are bought together based on similarity (not 
         popularity)
+        The LLR indicates where a significant similarity might exist
+        finding pairs of books that occurred next to each other with a significantly higher frequency than would be expected, based on the book frequencies alone
         """
         Hcols=Hrows=Htot=0.0
         invN = 1.0/(sum(k_matrix[0])+sum(k_matrix[1]))
@@ -334,7 +331,6 @@ class Recommender(object):
                    self._items_llr.ix[i,j] = self.calc_llr(tmpk)
                 else:
                    self._items_llr.ix[i,j] = self._items_llr.iat[j,i]#symm
-        print self._items_llr
     def get_similar_item(self, item_id, user_id=None, algorithm='simple'):
         """
         Simple: return the row of the co-occurence matrix ordered by score or,
